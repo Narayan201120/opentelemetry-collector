@@ -53,11 +53,29 @@ Critical flows (regression checklist):
   - Delta: latency -89% (exceeds 50% target for this workload), allocs unchanged, B/op unchanged
 - Tests: `go test ./internal/queue -count=1` PASS (10.8s), `go test ./...` in `exporter/exporterhelper` PASS, `go vet ./internal/queue/...` clean. Existing `TestObsQueue*` all PASS, including failure paths (error still records when enabled).
 - Existing `BenchmarkMemoryQueueWaitForResult` unaffected as expected (tests `memoryQueue` directly, bypasses `obsQueue`).
-- Status: KEPT, commit next.
+- Status: KEPT, committed as `4b11f5229`.
 
-## Size breakdown (TODO)
-- `go list -f '{{.ImportPath}} {{.Deps}}'` + `gonum, k8s.io, prometheus, gopsutil, klauspost/compress` heavy transitives noted in discovery. No removals yet, need unused proof.
-- Builder already `-trimpath -s -w -tags grpcnotrace`, `CGO_ENABLED=0`. No PGO/LTO in repo.
+### 2 — `asyncQueue.Offer` guard `AddEvent` with `IsRecording()` — REVERTED
+- File: `exporter/exporterhelper/internal/queue/async_queue.go` (reverted, no diff)
+- Why tried: `SpanFromContext` + 2x `AddEvent` per Offer, no-op when non-recording. Guard saves interface calls.
+- Measure: `BenchmarkMemoryQueueWaitForResult` (bypasses asyncQueue) 159k/192k ns vs baseline 138-167k ns, within noise, no regression, no proven gain. Existing `BenchmarkAsyncMemoryQueue` skipped upstream. No dedicated async bench to prove >2% win. Per rule (keep only if improved), reverted.
+- Status: REVERTED.
+
+### 3 — Binary size via strip — MEASURED, no code change
+- Dev build `go build -trimpath -tags grpcnotrace`: 51,263,488 bytes.
+- Same + `-ldflags="-s -w"` (official builder default): 35,867,136 bytes, -30.0%.
+- Floor: official `cmd/builder` already defaults to `-ldflags="-s -w"`, `-trimpath`, `CGO_ENABLED=0`, `grpcnotrace`. Further 50% cut needs removing heavy transitives (`k8s.io`, `prometheus`, `gopsutil`, `klauspost/compress`, duplicate `backoff/v5+v7`, `yaml/v2+v3`), which needs unused proof across static/dynamic/reflection/config/build scripts. Not attempted, documented as remaining.
+- Dependency count: 101 `go.mod` modules, no removals (needs proof, blocked).
+
+## Size breakdown
+- `cmd/otelcorecol` minimal dist still links `grpc`, `protobuf`, `k8s.io/*`, `prometheus/*`, `gopsutil`, 3 compressors, `koanf`, `otel/sdk` + exporters, `contrib/detectors`. See discovery subagent notes.
+- Builder already optimal on flags. No PGO/LTO in repo. PGO TODO for CI.
+
+## Exit / stop
+- Primary micro-workload (`obsQueue` nop, 2k items): latency -89%, allocs unchanged, B/op unchanged. Exceeds 50% for that workload.
+- Other primaries: `ToProto` already 2 allocs (floor, hand-rolled marshal optimal), `FromProto` 4019 allocs (needs proto redesign, risky, blocked), `MemoryQueue` 1 alloc/offer (node pool unsafe with `waitForResult` abandon lifetime, documented, blocked), binary -30% via strip (already default in builder, floor).
+- Plateau: iteration 2 showed <2% (noise), no remaining hotspot >1% that is safe and cheap. Three-iteration rule not fully exhausted but further gains need product decisions (proto redesign, queue lifetime redesign, dep removals). Stopping with floor proof per skill.
+- No non-target regression: `exporterhelper ./...` PASS, `queue` PASS, vet clean. Existing benchmarks within noise.
 
 ## Remaining opportunities
 - PGO profile for otelcorecol, `-ldflags="-s -w"` verify in CI, duplicate `backoff/v5+v7`, `yaml/v2+v3`, `json-iterator` audit (needs static + dynamic proof, not done).
