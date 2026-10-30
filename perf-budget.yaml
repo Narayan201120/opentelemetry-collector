@@ -1,0 +1,31 @@
+# Perf budget — fail CI on regression
+# Checked by scripts/check-perf-budget.sh (Linux/CI) and .ps1 (Windows dev).
+# Numbers from Ryzen 5 5600H, Windows, go1.27.1. CI runners differ, so budgets are 3-4x current p50 to avoid flakes, but still catch old behavior (old obsQueue ~640-1600ns).
+
+benchmarks:
+  - name: BenchmarkObsQueueNopExpensive
+    package: go.opentelemetry.io/collector/exporter/exporterhelper/internal/queue
+    max_ns_per_op: 300
+    max_allocs_per_op: 3
+    max_bytes_per_op: 128
+    benchtime: 5000x
+    count: 3
+
+  - name: BenchmarkMemoryQueueWaitForResult
+    package: go.opentelemetry.io/collector/exporter/exporterhelper/internal/queue
+    max_ns_per_op: 300000
+    max_allocs_per_op: 120
+    benchtime: 10000x
+    count: 1
+
+  - name: BenchmarkTracesToProto2k
+    package: go.opentelemetry.io/collector/pdata/ptrace
+    max_ns_per_op: 200000
+    max_allocs_per_op: 5
+    benchtime: 1000x
+    count: 1
+
+binary:
+  otelcorecol_max_bytes: 60000000
+  build_tags: grpcnotrace
+  ldflags: -s -w
